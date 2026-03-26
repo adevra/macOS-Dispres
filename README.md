@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="img/headerimg.png" alt="Dispres menu bar screenshot" width="700">
+</p>
+
 # Dispres
 
 A lightweight macOS menu bar utility for switching display resolutions, creating virtual displays, and managing multi-monitor setups.
@@ -84,6 +88,10 @@ The virtual display appears as a real screen to macOS and remote desktop softwar
 ### Setting the Main Display
 
 Each display submenu has a **Main Display** option. Click it to make that display the primary screen. This works for both physical and virtual displays.
+
+<p align="center">
+  <img src="img/aboutimg.png" alt="Dispres about window" width="350">
+</p>
 
 ## Technical Details
 
