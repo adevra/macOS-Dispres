@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="img/readme-header.png" alt="Dispres" width="700">
+  <img src="img/readme-header.png" alt="Dispres" width="1200">
 </p>
 
 # Dispres
