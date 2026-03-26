@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="img/headerimg.png" alt="Dispres menu bar screenshot" width="700">
+  <img src="img/readme-header.png" alt="Dispres" width="700">
 </p>
 
 # Dispres
@@ -73,6 +73,10 @@ swift build
 2. Click it to see all connected displays
 3. Hover over a display to see available resolutions
 4. Click a resolution to switch to it
+
+<p align="center">
+  <img src="img/headerimg.png" alt="Dispres menu bar screenshot" width="700">
+</p>
 
 ### Virtual Displays (for Remote Desktop)
 
