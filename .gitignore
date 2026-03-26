@@ -1,0 +1,27 @@
+# Swift / SPM
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# App bundle (build output)
+Dispres.app/
+
+# Build artifacts
+*.o
+*.dSYM/
+
+# Misc
+/tmp/
+*.log
