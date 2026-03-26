@@ -1,22 +1,80 @@
-# This workflow will build a Swift project
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-swift
-
-name: Swift
+name: Build & Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 1.0.0)"
+        required: true
+        default: "1.0.0"
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    tags:
+      - "v*"
 
 jobs:
   build:
+    runs-on: macos-15
 
-    runs-on: macos-latest
+    permissions:
+      contents: write
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: swift build -v
-    - name: Run tests
-      run: swift test -v
+      - uses: actions/checkout@v4
+
+      - name: Set version from tag or input
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Build release binary
+        run: swift build -c release
+
+      - name: Create app bundle
+        run: |
+          APP_NAME="Dispres"
+          BUNDLE_DIR="$APP_NAME.app"
+          CONTENTS="$BUNDLE_DIR/Contents"
+          MACOS="$CONTENTS/MacOS"
+          RESOURCES="$CONTENTS/Resources"
+
+          mkdir -p "$MACOS" "$RESOURCES"
+          cp ".build/release/$APP_NAME" "$MACOS/$APP_NAME"
+          cp "Sources/Dispres/Resources/Info.plist" "$CONTENTS/Info.plist"
+
+          # Stamp version into Info.plist
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$CONTENTS/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$CONTENTS/Info.plist"
+
+          if [ -f "AppIcon.icns" ]; then
+            cp "AppIcon.icns" "$RESOURCES/AppIcon.icns"
+          fi
+
+          codesign --force --sign - "$BUNDLE_DIR"
+
+      - name: Create DMG
+        run: |
+          hdiutil create -volname "Dispres" \
+            -srcfolder Dispres.app \
+            -ov -format UDZO \
+            "Dispres-$VERSION-macOS.dmg"
+
+      - name: Create ZIP
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent Dispres.app "Dispres-$VERSION-macOS.zip"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || format('v{0}', env.VERSION) }}
+          name: Dispres v${{ env.VERSION }}
+          draft: false
+          generate_release_notes: true
+          files: |
+            Dispres-${{ env.VERSION }}-macOS.dmg
+            Dispres-${{ env.VERSION }}-macOS.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
