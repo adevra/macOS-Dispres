@@ -3,9 +3,10 @@ import SwiftUI
 @main
 struct DispresApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var displayManager = DisplayManager()
-    @StateObject private var virtualDisplayService = VirtualDisplayService()
-    @StateObject private var loginItemService = LoginItemService()
+    @StateObject private var displayManager = AppServices.shared.displayManager
+    @StateObject private var virtualDisplayService = AppServices.shared.virtualDisplayService
+    @StateObject private var loginItemService = AppServices.shared.loginItemService
+    @StateObject private var recoveryCoordinator = AppServices.shared.recoveryCoordinator
 
     var body: some Scene {
         MenuBarExtra("Dispres", systemImage: "display") {
@@ -37,14 +38,10 @@ struct DispresApp: App {
             .environmentObject(displayManager)
             .environmentObject(virtualDisplayService)
             .environmentObject(loginItemService)
+            .environmentObject(recoveryCoordinator)
             .onAppear {
-                displayManager.start()
-                virtualDisplayService.startup()
-                // Restore display state after virtual displays have time to come up
-                Task {
-                    try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    displayManager.restoreState()
-                }
+                // Already done at launch; a no-op safety net.
+                AppServices.shared.bootstrap()
             }
         }
         .menuBarExtraStyle(.menu)
@@ -58,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
+        AppServices.shared.bootstrap()
         ProcessInfo.processInfo.disableAutomaticTermination("Menu bar app must stay running")
         ProcessInfo.processInfo.disableSuddenTermination()
     }

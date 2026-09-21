@@ -23,9 +23,23 @@ final class DisplayManager: ObservableObject {
     @Published var customResolutions: [CustomResolution] = []
     @Published var lastError: String?
 
+    /// Supplies the display IDs currently backed by CGVirtualDisplay, so we never treat
+    /// a virtual screen as somewhere the user can actually look.
+    var virtualDisplayIDProvider: (@MainActor () -> Set<CGDirectDisplayID>)?
+
+    /// Fires when the built-in panel comes back after having been absent (lid opened).
+    var onBuiltInDisplayReturned: (@MainActor () -> Void)?
+
+    /// Fires when the built-in panel goes away (lid closed). A late fallback — by this
+    /// point there may already be no displays at all — used only if the clamshell
+    /// notification is unavailable.
+    var onBuiltInDisplayLeft: (@MainActor () -> Void)?
+
     private static let customResKey = "customResolutions"
     private static let stateKey = "dispres.DisplayState"
     private var started = false
+    private var builtInWasActive = false
+    private var builtInPresenceSeeded = false
 
     nonisolated init() {
         // Registration happens in onAppear via start()
@@ -65,17 +79,15 @@ final class DisplayManager: ObservableObject {
             }
         }
 
-        // Restore main display
+        // Restore main display. Never hand the menu bar to a virtual display while the
+        // built-in panel is live — that is the state you cannot click your way out of.
         if let mainKey = state.mainDisplayKey {
-            for display in displays {
-                if stableKey(for: display.id) == mainKey && CGDisplayIsMain(display.id) == 0 {
-                    var config: CGDisplayConfigRef?
-                    if CGBeginDisplayConfiguration(&config) == .success {
-                        CGConfigureDisplayOrigin(config, display.id, 0, 0)
-                        CGCompleteDisplayConfiguration(config, .permanently)
-                    }
-                    break
-                }
+            let builtInActive = displays.contains { $0.isBuiltIn }
+            for display in displays where stableKey(for: display.id) == mainKey {
+                guard CGDisplayIsMain(display.id) == 0 else { break }
+                guard !(builtInActive && isVirtual(display.id)) else { break }
+                moveToOrigin(display.id, persist: !isVirtual(display.id))
+                break
             }
         }
 
@@ -87,7 +99,9 @@ final class DisplayManager: ObservableObject {
 
         for display in displays {
             let key = stableKey(for: display.id)
-            if CGDisplayIsMain(display.id) != 0 {
+            // Don't remember a virtual display as main: it may not exist next launch,
+            // and restoring it while the lid is open strands the menu bar.
+            if CGDisplayIsMain(display.id) != 0 && !isVirtual(display.id) {
                 state.mainDisplayKey = key
             }
             if let current = display.currentMode {
@@ -115,6 +129,46 @@ final class DisplayManager: ObservableObject {
 
     func refresh() {
         displays = enumerateDisplays()
+        updateBuiltInPresence()
+    }
+
+    func isVirtual(_ displayID: CGDirectDisplayID) -> Bool {
+        virtualDisplayIDProvider?().contains(displayID) ?? false
+    }
+
+    /// Track whether the built-in panel is live. Absent -> present means the lid was
+    /// opened after a clamshell session, which is the moment a leftover virtual display
+    /// would otherwise be holding the menu bar and every window off-screen.
+    private func updateBuiltInPresence() {
+        let nowActive = displays.contains { $0.isBuiltIn }
+        guard builtInPresenceSeeded else {
+            builtInPresenceSeeded = true
+            builtInWasActive = nowActive
+            return
+        }
+        let returned = nowActive && !builtInWasActive
+        let left = !nowActive && builtInWasActive
+        builtInWasActive = nowActive
+        if returned { onBuiltInDisplayReturned?() }
+        if left { onBuiltInDisplayLeft?() }
+    }
+
+    /// Put an arbitrary display at the origin so it owns the menu bar.
+    @discardableResult
+    func makeMain(displayID: CGDirectDisplayID) -> Bool {
+        refresh()
+        guard displays.contains(where: { $0.id == displayID }) else { return false }
+        guard CGDisplayIsMain(displayID) == 0 else { return true }
+        return moveToOrigin(displayID, persist: !isVirtual(displayID))
+    }
+
+    /// Put the built-in panel back at the origin so it owns the menu bar again.
+    @discardableResult
+    func makeBuiltInMain() -> Bool {
+        refresh()
+        guard let builtIn = displays.first(where: { $0.isBuiltIn }) else { return false }
+        guard CGDisplayIsMain(builtIn.id) == 0 else { return true }
+        return moveToOrigin(builtIn.id, persist: true)
     }
 
     // MARK: - Display Enumeration
@@ -241,19 +295,30 @@ final class DisplayManager: ObservableObject {
     func setAsMainDisplay(_ display: DisplayInfo) {
         guard CGDisplayIsMain(display.id) == 0 else { return }
 
-        var config: CGDisplayConfigRef?
-        guard CGBeginDisplayConfiguration(&config) == .success else {
-            showErrorAlert("Failed to begin display configuration.")
-            return
-        }
+        // A virtual display is committed for this session only: writing it into the
+        // system's saved arrangement is what leaves the Mac unusable on the next lid
+        // open or login, with the menu bar parked on a screen nobody can see.
+        let persist = !isVirtual(display.id)
 
-        // To make a display "main", move it to (0,0) and shift all others
-        // by the inverse of its current origin so relative positions are preserved.
-        let targetBounds = CGDisplayBounds(display.id)
+        if moveToOrigin(display.id, persist: persist) {
+            refresh()
+            saveState()
+        } else {
+            showErrorAlert("Failed to set \(display.name) as main display.")
+        }
+    }
+
+    /// Move `displayID` to (0,0) and shift every other display by the inverse of its old
+    /// origin, so relative positions survive. The display at the origin is the main one.
+    @discardableResult
+    private func moveToOrigin(_ displayID: CGDirectDisplayID, persist: Bool) -> Bool {
+        var config: CGDisplayConfigRef?
+        guard CGBeginDisplayConfiguration(&config) == .success, let config else { return false }
+
+        let targetBounds = CGDisplayBounds(displayID)
         let dx = Int32(targetBounds.origin.x)
         let dy = Int32(targetBounds.origin.y)
 
-        // Enumerate all active displays and reposition each one
         var displayIDs = [CGDirectDisplayID](repeating: 0, count: 16)
         var count: UInt32 = 0
         CGGetActiveDisplayList(16, &displayIDs, &count)
@@ -261,17 +326,10 @@ final class DisplayManager: ObservableObject {
         for i in 0..<Int(count) {
             let id = displayIDs[i]
             let bounds = CGDisplayBounds(id)
-            let newX = Int32(bounds.origin.x) - dx
-            let newY = Int32(bounds.origin.y) - dy
-            CGConfigureDisplayOrigin(config, id, newX, newY)
+            CGConfigureDisplayOrigin(config, id, Int32(bounds.origin.x) - dx, Int32(bounds.origin.y) - dy)
         }
 
-        if CGCompleteDisplayConfiguration(config, .permanently) == .success {
-            refresh()
-            saveState()
-        } else {
-            showErrorAlert("Failed to set \(display.name) as main display.")
-        }
+        return CGCompleteDisplayConfiguration(config, persist ? .permanently : .forSession) == .success
     }
 
     // MARK: - Resolution Switching

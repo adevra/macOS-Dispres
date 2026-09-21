@@ -31,6 +31,19 @@ struct VirtualDisplayConfig: Codable, Identifiable, Equatable {
     var label: String {
         "\(width) \u{00d7} \(height) @ \(Int(refreshRate))Hz\(hiDPI ? " HiDPI" : "")"
     }
+
+    /// Deterministic 32-bit serial folded from the config UUID (FNV-1a).
+    /// `hashValue` is randomly seeded per process, so using it here meant the display's
+    /// identity changed on every launch and saved per-display state never matched.
+    var stableSerial: UInt32 {
+        withUnsafeBytes(of: id.uuid) { raw in
+            var acc: UInt32 = 0x811C_9DC5
+            for byte in raw {
+                acc = (acc ^ UInt32(byte)) &* 0x0100_0193
+            }
+            return acc
+        }
+    }
 }
 
 // MARK: - Service
@@ -41,6 +54,11 @@ final class VirtualDisplayService: ObservableObject {
     @Published private(set) var activeConfigIDs: Set<UUID> = []
 
     private var activeDisplays: [UUID: CGVirtualDisplay] = [:]
+
+    /// CGDirectDisplayIDs currently backed by a virtual display.
+    var activeDisplayIDs: Set<CGDirectDisplayID> {
+        Set(activeDisplays.values.map(\.displayID))
+    }
     private static let configsKey = "dispres.VirtualDisplayConfigs"
 
     init() {
@@ -48,14 +66,26 @@ final class VirtualDisplayService: ObservableObject {
     }
 
     func startup() {
-        let autoConfigs = configs.filter { $0.autoCreate }
-        guard !autoConfigs.isEmpty else { return }
+        guard configs.contains(where: { $0.autoCreate }) else { return }
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
-            for config in autoConfigs {
-                _ = await create(config: config)
-            }
+            // Skip configs that are already up: creating a second CGVirtualDisplay for
+            // the same config replaces the first, which silently discards any
+            // arrangement already applied to it.
+            await ensureAutoCreateDisplays()
         }
+    }
+
+    /// Bring up every auto-create config that isn't already running. Used to re-arm the
+    /// clamshell session after a lid-open teardown; without it the second lid close has
+    /// no display to fall back to.
+    @discardableResult
+    func ensureAutoCreateDisplays() async -> Int {
+        var created = 0
+        for config in configs where config.autoCreate && !isActive(config.id) {
+            if await create(config: config) { created += 1 }
+        }
+        return created
     }
 
     // MARK: - Create / Destroy
@@ -74,7 +104,7 @@ final class VirtualDisplayService: ObservableObject {
         descriptor.name = config.name
         descriptor.vendorID = 0xEEEE
         descriptor.productID = 0x0001
-        descriptor.serialNum = UInt32(config.id.hashValue & 0xFFFF)
+        descriptor.serialNum = config.stableSerial
 
         guard let virtualDisplay = CGVirtualDisplay(descriptor: descriptor) else {
             return false
@@ -130,9 +160,15 @@ final class VirtualDisplayService: ObservableObject {
         return true
     }
 
-    func destroyAll() {
+    /// Tear down every virtual display. Returns true if anything was actually removed.
+    /// CGVirtualDisplay has no explicit destroy call — the screen goes away when the last
+    /// reference is released, so dropping them here is the teardown.
+    @discardableResult
+    func destroyAll() -> Bool {
+        let had = !activeDisplays.isEmpty
         activeDisplays.removeAll()
         activeConfigIDs.removeAll()
+        return had
     }
 
     func isActive(_ configID: UUID) -> Bool {

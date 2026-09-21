@@ -28,6 +28,13 @@ Built for macOS 15+ (Sequoia/Tahoe). Runs natively on Apple Silicon and Intel.
 - Auto-recreate on app launch
 - Useful for headless Mac setups and clamshell mode with remote access
 
+### Clamshell Mode (Lid Closed, Remote Only)
+- Keep using a MacBook over RustDesk/VNC with the **lid shut** — no external display or dummy HDMI plug needed
+- Closing the lid brings up your virtual display and hands it the menu bar automatically
+- Opening the lid tears it down and returns the built-in panel to main, so every window comes back with it
+- **⌃⌥⌘D** recovers from anywhere — including when the menu bar is stranded on a screen you can't see
+- Arms itself on a cold start too, so a login-item launch with the lid already closed works
+
 ### Display Management
 - Set any display as the **main display** directly from the menu (including virtual displays)
 - Remembers display state (main display + resolutions) across restarts
@@ -45,8 +52,8 @@ Built for macOS 15+ (Sequoia/Tahoe). Runs natively on Apple Silicon and Intel.
 Requires Xcode 16+ and macOS 15+.
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/macOS-Dispres.git
-cd Dispres
+git clone https://github.com/adevra/macOS-Dispres.git
+cd macOS-Dispres
 ./bundle.sh
 ```
 
@@ -97,6 +104,28 @@ Each display submenu has a **Main Display** option. Click it to make that displa
   <img src="img/aboutimg.png" alt="Dispres about window" width="350">
 </p>
 
+### Clamshell Mode (Lid Closed + Remote Desktop)
+
+For running a MacBook headless over RustDesk or VNC with the lid shut and no external display attached.
+
+First, stop macOS sleeping when the lid closes:
+
+```bash
+sudo pmset -a disablesleep 1
+```
+
+Then create a virtual display at the resolution you want to work at, with **Auto-create on launch** enabled. From then on:
+
+- **Close the lid** — Dispres creates the virtual display if it isn't already up and makes it the main display, so your remote session switches to that resolution
+- **Open the lid** — the virtual display is removed and the built-in panel becomes main again, bringing your windows back
+- **⌃⌥⌘D** — global hot key that runs the same recovery by hand
+
+Turn the behaviour off with **Auto-Switch Virtual Display on Lid Close/Open** in the menu.
+
+To undo the sleep change afterwards: `sudo pmset -a disablesleep 0`. It applies on battery too, so the Mac won't sleep unplugged until you do.
+
+> **Why this exists:** a virtual display left as main while the lid is shut keeps the menu bar and every window after you reopen the lid. The built-in panel comes back showing an empty desktop, nothing is clickable, and the menu bar icon that would undo it is itself off-screen. Recovering from that used to mean a hard restart.
+
 ## Technical Details
 
 - Uses CoreGraphics public APIs for display enumeration and resolution switching
@@ -104,6 +133,9 @@ Each display submenu has a **Main Display** option. Click it to make that displa
 - Virtual displays use the private `CGVirtualDisplay` API (macOS 14+)
 - Private `CGSConfigureDisplayMode` API as fallback for custom resolutions
 - Display state is persisted using stable identifiers (vendor/model/serial) that survive reboots
+- Lid state comes from `IOPMrootDomain`'s `AppleClamshellState`, via an IOKit interest notification plus a 1s poll (the property lags the physical lid, so a single read on the notification drops edges)
+- The recovery hot key uses Carbon `RegisterEventHotKey`, so it needs no Accessibility permission and still fires when the menu bar is unreachable
+- Virtual displays are only ever made main `.forSession`, never `.permanently`, so they can't be written into the saved display arrangement
 - No sandbox — required for CoreGraphics display configuration APIs
 
 ### Project Structure
@@ -119,8 +151,10 @@ Sources/
     ├── Models/
     │   └── DisplayModels.swift     # DisplayInfo, DisplayModeInfo, CustomResolution
     ├── Services/
+    │   ├── AppServices.swift       # Service container, bootstrapped at launch
     │   ├── DisplayManager.swift    # Display enumeration, mode switching, state persistence
     │   ├── VirtualDisplayService.swift  # Virtual display lifecycle management
+    │   ├── RecoveryService.swift   # Clamshell monitor, lid handling, recovery hot key
     │   ├── LoginItemService.swift  # Launch at Login (SMAppService / LaunchAgent)
     │   └── PrivateAPIs.swift       # CGS private API declarations
     └── Views/
@@ -137,6 +171,8 @@ Sources/
 - **Virtual displays** require macOS 14+ and use private APIs that may change between OS versions
 - **Not for App Store** — this app uses private CoreGraphics APIs (`CGVirtualDisplay`, `CGSConfigureDisplayMode`) that Apple does not allow on the App Store
 - **Launch at Login** via `SMAppService` requires running from the `.app` bundle
+- **Clamshell mode** needs `sudo pmset -a disablesleep 1` — without an external display macOS sleeps on lid close regardless. This also stops the Mac sleeping on battery until you revert it
+- **FileVault + clamshell**: if the Mac reboots with the lid shut you land at the pre-boot unlock screen, where nothing is running and remote access isn't possible yet
 
 ## License
 

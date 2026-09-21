@@ -4,6 +4,7 @@ struct MenuContentView: View {
     @EnvironmentObject var displayManager: DisplayManager
     @EnvironmentObject var virtualDisplayService: VirtualDisplayService
     @EnvironmentObject var loginItemService: LoginItemService
+    @EnvironmentObject var recoveryCoordinator: RecoveryCoordinator
     var openCustomResolution: (DisplayInfo) -> Void
     var openCreateVirtualDisplay: () -> Void
 
@@ -22,6 +23,17 @@ struct MenuContentView: View {
             displayManager.refresh()
         }
         .keyboardShortcut("r")
+
+        Button("Recover Displays\u{2026}") {
+            recoveryCoordinator.recover()
+        }
+
+        Button {
+            recoveryCoordinator.autoSwitchForClamshell.toggle()
+        } label: {
+            let check = recoveryCoordinator.autoSwitchForClamshell ? "\u{2713} " : "   "
+            Text("\(check)Auto-Switch Virtual Display on Lid Close/Open")
+        }
 
         Divider()
 
@@ -54,6 +66,9 @@ struct MenuContentView: View {
         Remembers display state across restarts.
 
         Uses CoreGraphics display management APIs.
+
+        Stuck with the menu bar on an invisible virtual display?
+        Press \(RecoveryHotKey.displayString) to recover.
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
